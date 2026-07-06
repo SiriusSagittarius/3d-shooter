@@ -1,0 +1,11 @@
+@mixin flex-center{
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+    }
+@mixin fade-in($time:0.3s, $ease: ease-in-out){
+    
+    animation: fade-in $time $ease;
+}
+

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <title>JS 3D Shooter - Mit Audio</title>
+    <link rel="stylesheet" href="styles/style.css" />
+  </head>
+  <body>
+    <!-- Sniper Bilder -->
+    <img id="scope" src="assets/img/sniper/s1.png" alt="Scope" />
+    <img id="weapon" src="assets/img/sniper/2.png" alt="Weapon" />
+
+    <div id="info">
+      WASD = Laufen / Umschauen (im Auto) | Pfeiltasten = Fahren | Maus =
+      Schauen |
+      <b>Linksklick = SCHIESSEN</b> | <b>Mausrad (Klick) = Zielen</b> |
+      <b>Rechtsklick = Nachladen</b><br />
+      <b>Besen (B):</b> Maus = Richtung, Links-Klick = Gas, Mausrad = Schraube |
+      <b>E = Auto Ein-/Aussteigen</b> | ❤️ Leben:
+      <span id="health" style="color: #0f0">100</span> | Munition:
+      <span id="ammo">30</span> / 30 | Punkte:
+      <span id="score">0</span>
+    </div>
+    <div id="crosshair"></div>
+    <canvas id="gameCanvas"></canvas>
+    <canvas id="minimap" width="200" height="200"></canvas>
+
+    <!-- Rückspiegel Rahmen -->
+    <div id="mirrorBorder"></div>
+
+    <!-- Auto Dashboard -->
+    <div id="dashboard">
+      <div class="dial">
+        <span id="speedDisplay">0</span>
+        <label>km/h</label>
+      </div>
+    </div>
+
+    <!-- MENÜ SYSTEM -->
+    <div id="menuOverlay">
+      <h1 id="menuTitle">3D SHOOTER</h1>
+      <button id="startBtn">Spiel Starten</button>
+      <button id="resumeBtn" style="display: none">Weiter</button>
+      <button id="muteBtn">🔊 Ton: AN</button>
+
+      <div class="enemy-config">
+        <h3>EIGENE GEGNER</h3>
+        <label for="enemyUpload" class="custom-file-upload"
+          >Bilder hochladen</label
+        >
+        <input type="file" id="enemyUpload" multiple accept="image/*" />
+        <div id="enemyStatus">0 Gegner aktiv</div>
+      </div>
+    </div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+          "game-level": "./js/level/level-boxes.js",
+          "car-class": "./js/object/car/car.js",
+          "broom-class": "./js/object/brom/broom.js"
+        }
+      }
+    </script>
+
+    <script type="module" src="js/modul/main.js"></script>
+  </body>
+</html>
