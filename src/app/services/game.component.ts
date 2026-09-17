@@ -24,7 +24,8 @@ import { Subscription } from 'rxjs';
   template: `
     <app-debug-overlay></app-debug-overlay>
 
-    <!-- Die Waffe ist jetzt ein echtes 3D-Modell an der Kamera (WeaponViewService). -->
+    <!-- First-Person-Waffe als 2D-Sprite (s2 = Ruhe, s3-s5 = Schuss-Animation) -->
+    <img #weaponEl id="weapon" src="assets/img/sniper/s2.png" alt="Weapon" style="display:none" />
 
     <!-- Scope-Overlay beim Zielen -->
     <img #scopeEl id="scope" src="assets/img/sniper/s1.png" style="display:none" />
@@ -107,6 +108,11 @@ import { Subscription } from 'rxjs';
     #scope {
       position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
       pointer-events: none; z-index: 10;
+    }
+    #weapon {
+      position: absolute; bottom: -10vh; left: 50%;
+      transform: translateX(calc(-50% + 350px)) rotateY(-15deg);
+      height: 50vh; pointer-events: none; z-index: 5;
     }
     #broom {
       position: absolute; bottom: -15vh; left: 50%; transform: translateX(-50%);
@@ -227,6 +233,7 @@ import { Subscription } from 'rxjs';
 export class GameComponent implements AfterViewInit, OnDestroy {
   @ViewChild('rendererContainer') rendererContainer!: ElementRef;
   @ViewChild('scopeEl') scopeEl!: ElementRef<HTMLImageElement>;
+  @ViewChild('weaponEl') weaponEl!: ElementRef<HTMLImageElement>;
   @ViewChild('broomEl') broomEl!: ElementRef<HTMLImageElement>;
   @ViewChild('crosshairEl') crosshairEl!: ElementRef<HTMLDivElement>;
   @ViewChild('dashboardEl') dashboardEl!: ElementRef<HTMLDivElement>;
@@ -310,7 +317,7 @@ export class GameComponent implements AfterViewInit, OnDestroy {
     // 2. Szene & Audio Setup — Start zu Fuß auf Augenhöhe.
     this.camera.position.set(0, 1.6, 20);
     this.camera.lookAt(0, 1.6, 0);
-    // Kamera in die Szene: nötig, damit Kamera-Kinder (3D-Waffe) gerendert werden.
+    // Kamera in die Szene: nötig, damit Kamera-Kinder (Audio-Listener) aktiv sind.
     this.scene.add(this.camera);
     this.gameEngine.init(this.camera, this.renderer.domElement);
     this.levelService.createEnvironment(this.scene);
@@ -349,7 +356,7 @@ export class GameComponent implements AfterViewInit, OnDestroy {
       await Promise.all([
         this.gameEngine.loadGameAssets(),
         this.gameEngine.loadCarModel(this.scene),
-        this.weaponView.init(this.camera)
+        this.weaponView.init(this.weaponEl.nativeElement)
       ]);
     } catch (err) {
       console.error("Fehler beim Laden der Assets", err);
@@ -358,6 +365,8 @@ export class GameComponent implements AfterViewInit, OnDestroy {
     }
 
     window.addEventListener('resize', this.onWindowResize.bind(this));
+    (window as any).__scene = this.scene; // TEMP-DIAGNOSE: wieder entfernen
+    (window as any).__camera = this.camera; // TEMP-DIAGNOSE: wieder entfernen
   }
 
   /** Verbindet alle Waffen-/Kampf-Events mit der Darstellung. */
@@ -398,7 +407,7 @@ export class GameComponent implements AfterViewInit, OnDestroy {
     // Erlittener Schaden -> roter Rand-Flash + Screenshake.
     this.subs.push(this.playerService.damaged$.subscribe(() => this.playDamageFeedback()));
 
-    // Schuss -> 3D-Rückstoß + Mündungsfeuer an der Waffe.
+    // Schuss -> Sprite-Animation (s3-s5) + Rückstoß an der Waffe.
     this.subs.push(this.weaponService.fired$.subscribe(() => {
       this.weaponView.triggerShot();
     }));
