@@ -2,11 +2,14 @@ import { Injectable } from '@angular/core';
 import { Subject, Observable } from 'rxjs';
 import * as THREE from 'three';
 import { GLTFLoader, GLTF } from 'three/addons/loaders/GLTFLoader.js'; // Pfad ist korrekt
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { Octree } from 'three/addons/math/Octree.js';
+import { Capsule } from 'three/addons/math/Capsule.js';
 import { Car } from '../models/car.model';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { Broom } from '../models/broom.model';
 import { InputService } from './input.service';
-import { LevelService } from './level.service';
+import { LevelService, GameWorld } from './level.service';
 import { ParticleService } from './particle.service';
 import { EnemyService } from './enemy.service';
 
@@ -31,6 +34,19 @@ export class GameEngineService {
 
   /** Aktueller Fortbewegungsmodus. Nur EINE Physik ist pro Frame aktiv. */
   public mode: PlayerMode = 'ON_FOOT';
+
+  /** Aktive Welt: 'arena' (Neon-Stadt), 'world2' (Lagerhalle), 'offroad' (Terrain). */
+  public world: GameWorld = 'arena';
+  /** Octree-Kollision der zweiten Welt (im Boden-Modus dort aktiv). */
+  private world2Octree?: Octree;
+  /** Kollisions-Kapsel des Spielers in Welt 2. */
+  private playerCapsule?: Capsule;
+  /** Verhindert sofortiges Zurück-Teleportieren direkt nach einem Portalwechsel. */
+  private portalCooldownUntil = 0;
+
+  private worldChangedSubject = new Subject<GameWorld>();
+  /** Feuert bei jedem Weltwechsel (für HUD-Hinweis). */
+  public worldChanged$: Observable<GameWorld> = this.worldChangedSubject.asObservable();
 
   private ringPassedSubject = new Subject<void>();
   /** Feuert, wenn der Besen durch einen Flug-Ring fliegt (für Score). */
@@ -59,6 +75,10 @@ export class GameEngineService {
     this.listener = new THREE.AudioListener();
     this.audioLoader = new THREE.AudioLoader();
     this.gltfLoader = new GLTFLoader();
+    // Ferrari-Modell ist Draco-komprimiert -> Decoder aus lokalen Assets (kein CDN).
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath('assets/draco/');
+    this.gltfLoader.setDRACOLoader(dracoLoader);
     this.clock = new THREE.Clock();
     this.broom = new Broom();
   }
@@ -133,16 +153,120 @@ export class GameEngineService {
    */
   public loadCarModel(scene: THREE.Scene): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.gltfLoader.load('assets/models/car/car.gltf', (gltf: GLTF) => {
+      this.gltfLoader.load('assets/models/ferrari/ferrari.glb', (gltf: GLTF) => {
         this.car = new Car(gltf.scene);
         this.car.setPosition(15, 0, 15); // Auto abseits vom Spawn parken (wie im Original)
         scene.add(this.car.mesh);
         resolve();
       }, undefined, (error: unknown) => {
-        console.error('Fehler beim Laden des Autos:', error);
+        console.error('Fehler beim Laden des Ferrari:', error);
         reject(error);
       });
     });
+  }
+
+  /**
+   * Lädt die animierten Gegner-Modelle (Soldat + Roboter) einmalig und übergibt
+   * Szene + Animationen an den EnemyService, der sie pro Gegner klont.
+   * Bricht nicht das Spiel ab, wenn ein Modell fehlt — der EnemyService fällt
+   * dann automatisch auf seine prozeduralen Neon-Gegner zurück.
+   */
+  public async loadEnemyModels(): Promise<void> {
+    const load = (url: string): Promise<GLTF | null> =>
+      new Promise(resolve => {
+        this.gltfLoader.load(url, gltf => resolve(gltf), undefined, err => {
+          console.warn(`Gegner-Modell nicht geladen (${url}) – nutze prozedurales Fallback.`, err);
+          resolve(null);
+        });
+      });
+
+    // Nur menschliche Gegner: der Soldat. (Roboter/Neon-Formen sind raus.)
+    const soldier = await load('assets/models/soldier/Soldier.glb');
+    if (soldier) this.enemyService.registerModel('jaeger', soldier.scene, soldier.animations);
+  }
+
+  /**
+   * Baut die zweite Welt (prozedurale Lagerhalle), erzeugt ihren Octree für die
+   * Lauf-Kollision auf und übergibt das Modell an den LevelService.
+   * Fehlt das Modell, bleibt nur die Arena verfügbar (kein Abbruch).
+   */
+  public loadWorldTwo(scene: THREE.Scene): Promise<void> {
+    // Prozedurale Lagerhalle bauen und ihren Octree für die Lauf-Kollision erzeugen.
+    const solids = this.levelService.buildWorldTwo(scene);
+    this.world2Octree = new Octree().fromGraphNode(solids);
+    // Spieler-Kapsel (Radius 0.35, Höhe ~1.5) für die Octree-Kollision.
+    this.playerCapsule = new Capsule(
+      new THREE.Vector3(0, 0.35, 0),
+      new THREE.Vector3(0, 1.45, 0),
+      0.35
+    );
+    // Dritte Welt: Offroad-Terrain aufbauen (Höhen werden zur Laufzeit gesampelt).
+    this.levelService.buildOffroad(scene);
+    return Promise.resolve();
+  }
+
+  /** Ankunftsposition beim Betreten einer Welt. */
+  private arrivalPoint(target: GameWorld): THREE.Vector3 {
+    if (target === 'world2') return new THREE.Vector3(0, 1.6, 0);
+    if (target === 'offroad') {
+      // Auf dem Terrain, nahe dem Rück-Portal (Höhe aus dem Terrain sampeln).
+      const z = 6;
+      return new THREE.Vector3(0, this.levelService.getTerrainHeight(0, z) + 1.6, z);
+    }
+    return new THREE.Vector3(0, 1.6, 20); // Arena-Spawn
+  }
+
+  /** Wechselt die aktive Welt und teleportiert den Spieler an den Ankunftspunkt. */
+  private switchWorld(target: GameWorld): void {
+    if (!this.camera) return;
+    this.world = target;
+    this.levelService.setWorld(target);
+    this.enemyService.setActiveWorld(target); // Gegner der Zielwelt aktivieren
+
+    // Weltwechsel immer zu Fuß.
+    if (this.mode !== 'ON_FOOT') this.resetToFoot();
+
+    // Auto in die passende Welt bringen: fahrbar in Arena + Offroad, versteckt in der Halle.
+    if (this.car) {
+      this.car.stop();
+      if (target === 'world2') {
+        this.car.mesh.visible = false;
+      } else if (target === 'offroad') {
+        this.car.mesh.visible = true;
+        const cx = 6, cz = 8;
+        this.car.setPosition(cx, this.levelService.getTerrainHeight(cx, cz), cz);
+      } else {
+        this.car.mesh.visible = true;
+        this.car.setPosition(15, 0, 15); // Arena-Parkplatz
+      }
+    }
+
+    const arrival = this.arrivalPoint(target);
+    this.camera.position.copy(arrival);
+    if (this.playerCapsule) {
+      this.playerCapsule.start.set(arrival.x, arrival.y - 1.25, arrival.z);
+      this.playerCapsule.end.set(arrival.x, arrival.y, arrival.z);
+    }
+    this.playerVelocity.set(0, 0, 0);
+    this.portalCooldownUntil = performance.now() + 1200; // kurz gegen Sofort-Rückwechsel sperren
+    this.playSound('door');
+    this.worldChangedSubject.next(target);
+  }
+
+  /** Prüft, ob der Spieler in einem Portal steht, und wechselt dann die Welt. */
+  private checkPortals(): void {
+    if (!this.camera || performance.now() < this.portalCooldownUntil) return;
+    const playerPos = this.mode === 'IN_CAR' && this.car ? this.car.mesh.position : this.camera.position;
+    for (const portal of this.levelService.getPortals()) {
+      // Nur Portale beachten, die in der aktuellen Welt stehen.
+      if (portal.from !== this.world) continue;
+
+      const p = portal.mesh.getWorldPosition(new THREE.Vector3());
+      if (playerPos.distanceTo(p) < 2.4) {
+        this.switchWorld(portal.target);
+        return;
+      }
+    }
   }
 
   public updateGame() {
@@ -160,7 +284,7 @@ export class GameEngineService {
     // Treffer-Partikel immer aktualisieren (modusunabhängig).
     this.particleService.update(delta);
 
-    // Gegner/Medikit nur bewegen, wenn das Spiel aktiv läuft (nicht im Menü/Pause).
+    // Gegner/Medikit im aktiven Spiel bewegen (EnemyService filtert nach aktiver Welt).
     if (this.controls?.isLocked) {
       const playerPos = this.mode === 'IN_CAR' && this.car
         ? this.car.mesh.position
@@ -183,6 +307,9 @@ export class GameEngineService {
         this.updateOnFoot(delta);
         break;
     }
+
+    // Portal-Betreten prüfen (zu Fuß oder im Auto).
+    if (this.controls?.isLocked && this.mode !== 'FLYING') this.checkPortals();
 
     this.updateSounds();
   }
@@ -283,7 +410,6 @@ export class GameEngineService {
     if (!this.car || !this.camera) return;
 
     const oldPos = this.car.mesh.position.clone();
-    const oldRot = this.car.mesh.rotation.clone();
 
     this.car.update({
       delta,
@@ -293,16 +419,44 @@ export class GameEngineService {
       right: this.inputService.steerRight
     });
 
-    if (this.checkCollisions()) {
+    if (this.world === 'offroad') {
+      this.settleCarOnTerrain();
+    } else if (this.world === 'arena' && this.checkCollisions()) {
+      // Nur in der Arena gibt es Hindernis-Boxen (Gebäude/Wände).
       this.car.mesh.position.copy(oldPos);
-      this.car.mesh.rotation.copy(oldRot);
       this.car.stop();
     }
 
-    // Verfolgerkamera: fester Offset hinter dem Auto, mitgedreht.
-    const offset = this.carCamOffset.clone().applyQuaternion(this.car.mesh.quaternion);
+    // Verfolgerkamera: aufrecht (nur Fahrtrichtung), damit Hangneigung nicht die Sicht kippt.
+    const yawQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.car.getHeading());
+    const offset = this.carCamOffset.clone().applyQuaternion(yawQuat);
     this.camera.position.copy(this.car.mesh.position).add(offset);
-    this.camera.lookAt(this.car.mesh.position);
+    this.camera.lookAt(this.car.mesh.position.x, this.car.mesh.position.y + 1, this.car.mesh.position.z);
+  }
+
+  /** Setzt das Auto auf die Terrainhöhe und neigt es in den Hang (Offroad). */
+  private settleCarOnTerrain(): void {
+    if (!this.car) return;
+    const p = this.car.mesh.position;
+    // In den Terrain-Grenzen bleiben.
+    const half = this.levelService.getTerrainHalf();
+    p.x = THREE.MathUtils.clamp(p.x, -half, half);
+    p.z = THREE.MathUtils.clamp(p.z, -half, half);
+    // Höhe = Terrain unter dem Auto.
+    p.y = this.levelService.getTerrainHeight(p.x, p.z);
+
+    // Hang-Normale aus benachbarten Höhen -> Auto in die Neigung kippen.
+    const e = 1.2;
+    const hL = this.levelService.getTerrainHeight(p.x - e, p.z);
+    const hR = this.levelService.getTerrainHeight(p.x + e, p.z);
+    const hD = this.levelService.getTerrainHeight(p.x, p.z - e);
+    const hU = this.levelService.getTerrainHeight(p.x, p.z + e);
+    const normal = new THREE.Vector3(hL - hR, 2 * e, hD - hU).normalize();
+
+    const up = new THREE.Vector3(0, 1, 0);
+    const yawQ = new THREE.Quaternion().setFromAxisAngle(up, this.car.getHeading());
+    const tiltQ = new THREE.Quaternion().setFromUnitVectors(up, normal);
+    this.car.mesh.quaternion.copy(tiltQ).multiply(yawQ);
   }
 
   /** Besen-Flug. */
@@ -357,14 +511,67 @@ export class GameEngineService {
 
     this.camera.position.y += this.playerVelocity.y * delta;
 
-    // Boden-Kollision (Einfach)
-    if (this.camera.position.y < 1.6) {
-      this.playerVelocity.y = 0;
-      this.camera.position.y = 1.6;
-      if (this.inputService.jump) {
-        this.playerVelocity.y = 12.0;
-        this.playSound('jump');
+    if (this.world === 'world2' && this.world2Octree && this.playerCapsule) {
+      this.resolveWorldTwoCollision();
+    } else if (this.world === 'offroad') {
+      // Offroad: der Boden ist die Terrainhöhe unter dem Spieler.
+      const groundY = this.levelService.getTerrainHeight(this.camera.position.x, this.camera.position.z) + 1.6;
+      if (this.camera.position.y < groundY) {
+        this.playerVelocity.y = 0;
+        this.camera.position.y = groundY;
+        if (this.inputService.jump) {
+          this.playerVelocity.y = 12.0;
+          this.playSound('jump');
+        }
       }
+    } else {
+      // Arena: einfache, flache Bodenkollision.
+      if (this.camera.position.y < 1.6) {
+        this.playerVelocity.y = 0;
+        this.camera.position.y = 1.6;
+        if (this.inputService.jump) {
+          this.playerVelocity.y = 12.0;
+          this.playSound('jump');
+        }
+      }
+    }
+  }
+
+  /**
+   * Octree-Kollision der zweiten Welt: die Spieler-Kapsel folgt der Kamera,
+   * wird gegen die Level-Geometrie geschoben und korrigiert die Kamera zurück.
+   */
+  private resolveWorldTwoCollision(): void {
+    if (!this.camera || !this.world2Octree || !this.playerCapsule) return;
+    const cap = this.playerCapsule;
+
+    // Kapsel unter die Kamera setzen (Auge ~1.25 über der Kapselspitze).
+    const eye = 1.25;
+    cap.start.set(this.camera.position.x, this.camera.position.y - eye, this.camera.position.z);
+    cap.end.set(this.camera.position.x, this.camera.position.y - eye + 1.1, this.camera.position.z);
+
+    const result = this.world2Octree.capsuleIntersect(cap);
+    let onGround = false;
+    if (result) {
+      // Aus der Wand/dem Boden herausschieben.
+      if (result.normal.y > 0.3) {          // Bodenkontakt
+        onGround = true;
+        this.playerVelocity.y = 0;
+      }
+      cap.translate(result.normal.multiplyScalar(result.depth));
+      // Kamera der korrigierten Kapsel folgen lassen.
+      this.camera.position.set(cap.start.x, cap.start.y + eye, cap.start.z);
+    }
+
+    if (onGround && this.inputService.jump) {
+      this.playerVelocity.y = 12.0;
+      this.playSound('jump');
+    }
+
+    // Failsafe: nicht durch den Weltboden fallen.
+    if (this.camera.position.y < -20) {
+      this.camera.position.set(0, 1.6, 0);
+      this.playerVelocity.set(0, 0, 0);
     }
   }
 

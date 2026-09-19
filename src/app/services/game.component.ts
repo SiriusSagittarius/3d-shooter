@@ -5,6 +5,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { GameEngineService } from './game-engine.service';
 import { LevelService } from './level.service';
 import { DebugOverlayComponent } from './debug-overlay.component';
@@ -309,10 +310,24 @@ export class GameComponent implements AfterViewInit, OnDestroy {
     this.composer.addPass(new OutputPass());
 
     // Dezente Umgebungs-Reflexionen (Auto-Lack, Pfützen, Gegner-Kristalle).
+    // Sofort: neutrale RoomEnvironment; danach durch echte HDR ersetzt (wärmer, realistischer).
     const pmrem = new THREE.PMREMGenerator(this.renderer);
+    pmrem.compileEquirectangularShader();
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.2;
-    pmrem.dispose();
+    this.scene.environmentIntensity = 0.25;
+
+    new RGBELoader().load('assets/hdr/venice_sunset_1k.hdr', (hdr) => {
+      hdr.mapping = THREE.EquirectangularReflectionMapping;
+      const envMap = pmrem.fromEquirectangular(hdr).texture;
+      this.scene.environment?.dispose?.();
+      this.scene.environment = envMap;      // echte HDR-Reflexionen (Ferrari-Lack, Metall)
+      this.scene.environmentIntensity = 0.35;
+      hdr.dispose();
+      pmrem.dispose();
+    }, undefined, () => {
+      // HDR fehlt -> RoomEnvironment bleibt, kein Abbruch.
+      pmrem.dispose();
+    });
 
     // 2. Szene & Audio Setup — Start zu Fuß auf Augenhöhe.
     this.camera.position.set(0, 1.6, 20);
@@ -351,11 +366,15 @@ export class GameComponent implements AfterViewInit, OnDestroy {
       this.animate();
     });
 
+    // Welt 2 (Lagerhalle) synchron aufbauen, damit sie unabhängig vom Audio bereit ist.
+    this.gameEngine.loadWorldTwo(this.scene);
+
     // 4. Assets laden
     try {
       await Promise.all([
         this.gameEngine.loadGameAssets(),
         this.gameEngine.loadCarModel(this.scene),
+        this.gameEngine.loadEnemyModels(),
         this.weaponView.init(this.weaponEl.nativeElement)
       ]);
     } catch (err) {
@@ -365,8 +384,6 @@ export class GameComponent implements AfterViewInit, OnDestroy {
     }
 
     window.addEventListener('resize', this.onWindowResize.bind(this));
-    (window as any).__scene = this.scene; // TEMP-DIAGNOSE: wieder entfernen
-    (window as any).__camera = this.camera; // TEMP-DIAGNOSE: wieder entfernen
   }
 
   /** Verbindet alle Waffen-/Kampf-Events mit der Darstellung. */
@@ -402,6 +419,13 @@ export class GameComponent implements AfterViewInit, OnDestroy {
     // Neue Welle -> großes Banner in der Bildschirmmitte.
     this.subs.push(this.enemyService.wave$.subscribe(wave => {
       if (wave > 0) this.showWaveBanner(wave);
+    }));
+
+    // Weltwechsel -> kurzer Hinweis im Banner.
+    this.subs.push(this.gameEngine.worldChanged$.subscribe(world => {
+      const label = world === 'world2' ? 'LAGERHALLE'
+                  : world === 'offroad' ? 'OFFROAD' : 'ARENA';
+      this.showBanner(label);
     }));
 
     // Erlittener Schaden -> roter Rand-Flash + Screenshake.
@@ -527,8 +551,13 @@ export class GameComponent implements AfterViewInit, OnDestroy {
 
   /** Wellen-Banner einblenden (CSS-Animation per Klassen-Retrigger). */
   private showWaveBanner(wave: number): void {
+    this.showBanner(`WELLE ${wave}`);
+  }
+
+  /** Zeigt einen kurzen, animierten Text in der Bildschirmmitte (Wellen, Weltwechsel). */
+  private showBanner(text: string): void {
     const el = this.waveBannerEl.nativeElement;
-    el.textContent = `WELLE ${wave}`;
+    el.textContent = text;
     el.classList.remove('show');
     void el.offsetWidth; // Reflow erzwingen, damit die Animation neu startet
     el.classList.add('show');
