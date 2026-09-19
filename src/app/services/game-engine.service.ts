@@ -64,7 +64,7 @@ export class GameEngineService {
   /** Abstand, ab dem man in Reichweite des Autos ist (Ein-/Ausstieg). */
   private readonly carEnterDistance = 6;
   /** Fester Kamera-Offset hinter/über dem Auto (Verfolgerkamera). */
-  private readonly carCamOffset = new THREE.Vector3(0, 4, 9);
+  private readonly carCamOffset = new THREE.Vector3(0, 2.7, 6.2);
 
   constructor(
     private inputService: InputService,
@@ -431,7 +431,11 @@ export class GameEngineService {
     const yawQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.car.getHeading());
     const offset = this.carCamOffset.clone().applyQuaternion(yawQuat);
     this.camera.position.copy(this.car.mesh.position).add(offset);
-    this.camera.lookAt(this.car.mesh.position.x, this.car.mesh.position.y + 1, this.car.mesh.position.z);
+    // Blick über das Auto nach vorne (Fahrtrichtung = -Z, mit Heading gedreht).
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(yawQuat);
+    const look = this.car.mesh.position.clone().addScaledVector(forward, 2.5);
+    look.y += 0.1; // etwas nach unten schauen -> Auto + Räder besser im Bild
+    this.camera.lookAt(look);
   }
 
   /** Setzt das Auto auf die Terrainhöhe und neigt es in den Hang (Offroad). */
