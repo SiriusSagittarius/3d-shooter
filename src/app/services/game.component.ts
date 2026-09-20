@@ -428,6 +428,9 @@ export class GameComponent implements AfterViewInit, OnDestroy {
       this.showBanner(label);
     }));
 
+    // Auto-Kamera umgeschaltet (Taste V) -> kurzer Hinweis.
+    this.subs.push(this.gameEngine.carCam$.subscribe(name => this.showBanner('KAMERA: ' + name)));
+
     // Erlittener Schaden -> roter Rand-Flash + Screenshake.
     this.subs.push(this.playerService.damaged$.subscribe(() => this.playDamageFeedback()));
 

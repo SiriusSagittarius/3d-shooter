@@ -615,6 +615,10 @@ export class EnemyService {
     inst.traverse(obj => {
       const mesh = obj as THREE.Mesh;
       if (!mesh.isMesh) return;
+      // WICHTIG: Raycast auf den animierten SkinnedMeshes abschalten. three.js testet
+      // sie gegen die statische Bind-Pose -> Treffer würden neben dem sichtbaren
+      // Soldaten liegen. Getroffen wird stattdessen die Trefferbox (unten).
+      mesh.raycast = () => {};
       const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       mesh.material = mats.map(m => {
         const cloned = m.clone();
@@ -626,6 +630,16 @@ export class EnemyService {
       });
       if (Array.isArray(mesh.material) && mesh.material.length === 1) mesh.material = mesh.material[0];
     });
+
+    // Unsichtbare Trefferbox, die dem Gegner folgt (das ist das eigentliche Ziel).
+    // Sie umschließt den stehenden Soldaten ~ (Breite 0.9, Höhe 2.0, Tiefe 0.7).
+    const hitbox = new THREE.Mesh(
+      new THREE.BoxGeometry(1.0, 2.3, 0.8),
+      new THREE.MeshBasicMaterial()
+    );
+    hitbox.position.y = 1.15;
+    hitbox.visible = false; // wird nicht gerendert, ist aber weiter raycastbar
+    root.add(hitbox);
 
     const color = new THREE.Color(0xff5533);
     return {

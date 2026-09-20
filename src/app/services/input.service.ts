@@ -61,5 +61,6 @@ export class InputService {
 
   get broom() { return this.isKeyDown('KeyB'); }
   get enterCar() { return this.isKeyDown('KeyF'); }
+  get changeCamera() { return this.isKeyDown('KeyV'); } // Auto-Kamera umschalten
   get isAccelerating() { return this.mouseLeftDown; }
 }
