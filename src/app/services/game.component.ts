@@ -15,6 +15,8 @@ import { ParticleService } from './particle.service';
 import { InputService } from './input.service';
 import { EnemyService } from './enemy.service';
 import { PlayerService } from './player.service';
+import { NetworkService } from './network.service';
+import { RemotePlayerService } from './remote-player.service';
 import { CommonModule } from '@angular/common';
 import { Subscription } from 'rxjs';
 
@@ -57,8 +59,9 @@ import { Subscription } from 'rxjs';
     <div id="healthBar">
       ❤️ {{ playerService.health$ | async }}
       <span class="ammo">🔫 {{ weaponService.ammo$ | async }}</span>
-      <span class="wave">🌊 W{{ enemyService.wave$ | async }}</span>
-      <span class="enemies">👾 {{ enemyService.count$ | async }}</span>
+      <span class="wave" *ngIf="!mpActive">🌊 W{{ enemyService.wave$ | async }}</span>
+      <span class="enemies" *ngIf="!mpActive">👾 {{ enemyService.count$ | async }}</span>
+      <span class="frags" *ngIf="mpActive">💀 {{ frags }} Kills</span>
     </div>
 
     <!-- Nachlade-Hinweis bei leerem Magazin -->
@@ -82,7 +85,11 @@ import { Subscription } from 'rxjs';
 
     <div class="game-container" #rendererContainer (click)="onStarted()">
       <div *ngIf="loading" class="overlay">Lade Assets...</div>
-      <div *ngIf="!started && !gameOver" class="overlay">Klicken zum Starten</div>
+      <div *ngIf="!started && !gameOver" class="overlay start">
+        <div class="startHint">Klicken zum Starten</div>
+        <button class="mpBtn" (click)="startMultiplayer($event)">🌐 Mehrspieler (LAN)</button>
+        <div class="mpStatus" *ngIf="mpStatus">{{ mpStatus }}</div>
+      </div>
 
       <div *ngIf="gameOver" class="overlay gameover">
         GAME OVER<br />
@@ -93,9 +100,33 @@ import { Subscription } from 'rxjs';
       </div>
 
       <div *ngIf="paused && !gameOver" class="overlay menu">
-        PAUSE<br />
-        <button (click)="resume($event)">Weiter</button>
-        <button (click)="toggleMute($event)">{{ muted ? '🔇 Ton: AUS' : '🔊 Ton: AN' }}</button>
+        <ng-container *ngIf="!showControls">
+          <div class="menuTitle">PAUSE</div>
+          <button (click)="resume($event)">▶ Weiter spielen</button>
+          <button (click)="toggleControls($event)">🎮 Steuerung anzeigen</button>
+          <button (click)="toggleMute($event)">{{ muted ? '🔇 Ton: AUS' : '🔊 Ton: AN' }}</button>
+          <button (click)="quit($event)">✖ Beenden</button>
+        </ng-container>
+
+        <div *ngIf="showControls" class="controls">
+          <div class="menuTitle">STEUERUNG</div>
+          <div class="ctrlGrid">
+            <span>Bewegen</span><b>W A S D</b>
+            <span>Umsehen</span><b>Maus</b>
+            <span>Schießen</span><b>Linksklick</b>
+            <span>Nachladen</span><b>R / Rechtsklick</b>
+            <span>Zielfernrohr</span><b>Mausrad-Klick</b>
+            <span>Zoom</span><b>Mausrad</b>
+            <span>Springen</span><b>Leertaste</b>
+            <span>Sprinten</span><b>Q</b>
+            <span>Auto ein/aussteigen</span><b>F</b>
+            <span>Fahren / Lenken</span><b>Pfeiltasten</b>
+            <span>Auto-Kamera wechseln</span><b>V</b>
+            <span>Fliegen (Besen)</span><b>B</b>
+            <span>Pause</span><b>ESC</b>
+          </div>
+          <button (click)="toggleControls($event)">◀ Zurück</button>
+        </div>
       </div>
     </div>
   `,
@@ -149,6 +180,16 @@ import { Subscription } from 'rxjs';
     #healthBar .enemies { margin-left: 12px; color: #ff6666; }
     #healthBar .ammo { margin-left: 12px; color: #ffcc66; }
     #healthBar .wave { margin-left: 12px; color: #66ccff; }
+    #healthBar .frags { margin-left: 12px; color: #ffdd44; }
+    .overlay.start { text-align: center; }
+    .overlay.start .startHint { margin-bottom: 16px; }
+    .mpBtn {
+      display: block; margin: 0 auto; padding: 10px 22px; font-size: 1.1rem;
+      cursor: pointer; border-radius: 6px; border: 1px solid #0ff;
+      background: rgba(0,60,80,0.8); color: #0ff; font-family: sans-serif;
+    }
+    .mpBtn:hover { background: rgba(0,90,120,0.9); }
+    .mpStatus { margin-top: 12px; font-size: 1rem; color: #ffcc66; }
     #scoreHud {
       position: absolute; top: 10px; left: 10px; z-index: 15;
       font-family: 'Courier New', monospace; pointer-events: none;
@@ -225,10 +266,19 @@ import { Subscription } from 'rxjs';
       cursor: pointer;
     }
     .menu { text-align: center; }
+    .menuTitle { font-size: 2rem; font-weight: bold; letter-spacing: 2px; margin-bottom: 16px; }
     .menu button {
       display: block; margin: 12px auto 0; padding: 10px 24px; font-size: 1.1rem;
-      cursor: pointer; min-width: 200px;
+      cursor: pointer; min-width: 260px;
     }
+    .controls { text-align: left; }
+    .controls .menuTitle { text-align: center; }
+    .ctrlGrid {
+      display: grid; grid-template-columns: auto auto; gap: 8px 28px;
+      font-size: 1rem; margin: 4px 0 8px;
+    }
+    .ctrlGrid span { opacity: 0.85; }
+    .ctrlGrid b { text-align: right; color: #ffd24a; white-space: nowrap; }
   `]
 })
 export class GameComponent implements AfterViewInit, OnDestroy {
@@ -256,6 +306,8 @@ export class GameComponent implements AfterViewInit, OnDestroy {
   public gameOver = false;
   public paused = false;
   public muted = false;
+  /** Zeigt im Pause-Menü die Steuerungs-Übersicht statt der Buttons. */
+  public showControls = false;
 
   // Endstand für das Game-Over-Overlay (Highscore via localStorage).
   public finalScore = 0;
@@ -266,6 +318,22 @@ export class GameComponent implements AfterViewInit, OnDestroy {
   // Scope-Zustand (steuert Overlay, FOV und Waffen-Sichtbarkeit).
   public scoped = false;
 
+  // --- Multiplayer (Deathmatch 1v1) ---
+  /** true = Runde laeuft im Mehrspieler-Modus (keine KI-Wellen). */
+  public mpActive = false;
+  /** Statuszeile im Startbildschirm (Verbindung/Fehler). */
+  public mpStatus = '';
+  /** Eigene Kills (aus dem Netzwerk-State). */
+  public frags = 0;
+  /** true zwischen eigenem Tod und Respawn — blockt das Schiessen. */
+  private mpFrozen = false;
+  /** Drosselung fuers Positions-Senden (~20x/Sek). */
+  private lastMoveSent = 0;
+  /** Letztes bekanntes eigenes Leben (fuer Schadens-Flash-Erkennung). */
+  private lastMyHp = 100;
+  private readonly hitDamage = 50;
+  private readonly moveSendIntervalMs = 50;
+
   constructor(
     private gameEngine: GameEngineService,
     private levelService: LevelService,
@@ -275,6 +343,8 @@ export class GameComponent implements AfterViewInit, OnDestroy {
     private inputService: InputService,
     public enemyService: EnemyService,
     public playerService: PlayerService,
+    public networkService: NetworkService,
+    private remotePlayers: RemotePlayerService,
     private ngZone: NgZone
   ) {}
 
@@ -338,8 +408,10 @@ export class GameComponent implements AfterViewInit, OnDestroy {
     this.levelService.createEnvironment(this.scene);
     this.particleService.init(this.scene);
     this.enemyService.init(this.scene);
+    this.remotePlayers.init(this.scene);
 
     this.wireWeaponEvents();
+    this.wireNetworkEvents();
 
     // Game Over: Endstand + Highscore ermitteln, Maus freigeben, Overlay zeigen.
     this.subs.push(this.playerService.dead$.subscribe(() => {
@@ -383,6 +455,11 @@ export class GameComponent implements AfterViewInit, OnDestroy {
       this.loading = false;
     }
 
+    // Soldaten-Modell fuer Mitspieler-Avatare bereitstellen (nach dem Laden).
+    if (this.gameEngine.soldierModel) {
+      this.remotePlayers.setModel(this.gameEngine.soldierModel.scene, this.gameEngine.soldierModel.clips);
+    }
+
     window.addEventListener('resize', this.onWindowResize.bind(this));
   }
 
@@ -391,6 +468,13 @@ export class GameComponent implements AfterViewInit, OnDestroy {
     // Treffer -> Partikel-Explosion; Gegner Schaden zufügen oder Level-Ziel entfernen.
     this.subs.push(this.weaponService.hit$.subscribe(({ point, object, color }) => {
       this.particleService.createExplosion(point, color);
+
+      // Mitspieler getroffen? -> dem Server melden (der rechnet Schaden/Kill).
+      const remoteId = this.remotePlayers.resolveHit(object);
+      if (remoteId) {
+        this.networkService.sendHit(remoteId, this.hitDamage);
+        return;
+      }
 
       // War es ein Gegner? Dann übernimmt der EnemyService (HP, Kill-Events).
       if (this.enemyService.hitEnemy(object) !== 'none') return;
@@ -477,25 +561,94 @@ export class GameComponent implements AfterViewInit, OnDestroy {
     }));
   }
 
+  /** Verbindet die Netzwerk-Ereignisse (Schuss/Kill/Verbindungsverlust) mit dem Spiel. */
+  private wireNetworkEvents(): void {
+    // Anderer Spieler hat geschossen -> leiser Schuss-Sound + kurzes Muendungsfeuer.
+    this.subs.push(this.networkService.shot$.subscribe(s => {
+      this.gameEngine.playSound('shoot', 0.25);
+      this.particleService.createExplosion(new THREE.Vector3(s.x, s.y, s.z), new THREE.Color(0xffdd66));
+    }));
+
+    // Eliminierung: eigene -> einfrieren bis Respawn; gegnerische -> Kill-Banner.
+    this.subs.push(this.networkService.killed$.subscribe(k => {
+      if (k.victim === this.networkService.sessionId) {
+        this.mpFrozen = true;
+        this.showBanner('ELIMINIERT');
+      } else if (k.killer === this.networkService.sessionId) {
+        this.showBanner('KILL!');
+      }
+    }));
+
+    // Verbindung verloren -> Hinweis, MP beenden.
+    this.subs.push(this.networkService.left$.subscribe(() => {
+      this.ngZone.run(() => {
+        this.mpActive = false;
+        this.mpStatus = 'Verbindung getrennt.';
+      });
+      this.remotePlayers.clear();
+    }));
+  }
+
+  /** Startet eine Mehrspieler-Runde: verbindet zum Server und aktiviert Deathmatch. */
+  async startMultiplayer(event: MouseEvent): Promise<void> {
+    event.stopPropagation(); // nicht gleichzeitig onStarted() (Einzelspieler) ausloesen
+    if (this.mpActive || this.networkService.connected) return;
+
+    const url = this.networkService.defaultUrl();
+    this.mpStatus = `Verbinde mit ${url} ...`;
+    try {
+      await this.networkService.connect(url, 'Spieler');
+    } catch (err) {
+      console.error('Multiplayer-Verbindung fehlgeschlagen', err);
+      this.mpStatus = 'Server nicht erreichbar. Laeuft "npm start" im server/-Ordner?';
+      return;
+    }
+
+    this.mpActive = true;
+    this.mpStatus = '';
+    this.lastMyHp = 100;
+    this.mpFrozen = false;
+    this.playerService.reset();
+    this.started = true;
+    this.gameEngine.lockControls();
+    this.gameEngine.resumeAudioContext();
+    this.gameEngine.startBackgroundMusic();
+  }
+
   public onStarted() {
     this.started = true;
     this.gameEngine.lockControls();
     this.gameEngine.resumeAudioContext();
     this.gameEngine.startBackgroundMusic();
-    this.enemyService.startWaves(); // idempotent — startet nur beim ersten Mal
+    // Im Deathmatch keine KI-Wellen — es geht nur gegeneinander.
+    if (!this.mpActive) this.enemyService.startWaves(); // idempotent
   }
 
   @HostListener('mousedown', ['$event'])
   onMouseDown(event: MouseEvent) {
     // Nur schießen, wenn Steuerung aktiv ist und man nicht im Auto sitzt.
     if (this.gameEngine.isLocked() && event.button === 0 && this.gameEngine.mode !== 'IN_CAR') {
+      if (this.mpFrozen) return; // eliminiert -> wartet auf Respawn
       this.weaponService.shoot(this.camera, this.targets());
+      if (this.networkService.connected) this.sendShoot();
     }
   }
 
-  /** Kombinierte Trefferliste: Level-Ziele + aktuelle Gegner. */
+  /** Kombinierte Trefferliste: Level-Ziele + Gegner + Mitspieler-Avatare. */
   private targets(): THREE.Object3D[] {
-    return [...this.levelService.getTargets(), ...this.enemyService.getEnemies()];
+    return [
+      ...this.levelService.getTargets(),
+      ...this.enemyService.getEnemies(),
+      ...this.remotePlayers.getHitboxes(),
+    ];
+  }
+
+  /** Meldet den eigenen Schuss (Kameraposition + Blickrichtung) an den Server. */
+  private sendShoot(): void {
+    const dir = new THREE.Vector3();
+    this.camera.getWorldDirection(dir);
+    const p = this.camera.position;
+    this.networkService.sendShoot(p.x, p.y, p.z, dir.x, dir.y, dir.z);
   }
 
   /** Datei-Upload: jedes Bild wird zu einem Gegner. */
@@ -525,7 +678,39 @@ export class GameComponent implements AfterViewInit, OnDestroy {
   /** Aus dem Pause-Menü fortsetzen. */
   resume(event: MouseEvent): void {
     event.stopPropagation();
+    this.showControls = false;
     this.gameEngine.lockControls();
+  }
+
+  /** Steuerungs-Übersicht im Pause-Menü ein-/ausblenden. */
+  toggleControls(event: MouseEvent): void {
+    event.stopPropagation();
+    this.showControls = !this.showControls;
+  }
+
+  /** Spiel beenden: alles zurücksetzen und zurück zum Startbildschirm. */
+  quit(event: MouseEvent): void {
+    event.stopPropagation();
+    this.gameEngine.unlockControls();
+    // Multiplayer sauber verlassen (Avatare weg, Verbindung trennen).
+    if (this.mpActive || this.networkService.connected) {
+      this.networkService.disconnect();
+      this.remotePlayers.clear();
+      this.mpActive = false;
+      this.frags = 0;
+      this.mpFrozen = false;
+      this.mpStatus = '';
+    }
+    this.playerService.reset();
+    this.weaponService.resetRun();
+    this.enemyService.reset();
+    this.gameEngine.resetToFoot();
+    this.camera.position.set(0, 1.6, 20);
+    this.camera.lookAt(0, 1.6, 0);
+    this.paused = false;
+    this.showControls = false;
+    this.gameOver = false;
+    this.started = false; // -> "Klicken zum Starten"-Overlay erscheint wieder
   }
 
   /** Ton an/aus (Master-Volume). */
@@ -597,7 +782,49 @@ export class GameComponent implements AfterViewInit, OnDestroy {
     this.updateDashboard();
     this.updateMinimap();
 
+    if (this.networkService.connected) this.updateMultiplayer();
+
     this.composer.render();
+  }
+
+  /** Pro Frame im Multiplayer: eigene Position senden, Avatare + eigenes Leben abgleichen. */
+  private updateMultiplayer(): void {
+    // Eigene Position/Blickrichtung gedrosselt senden (~20x/Sek), solange lebendig.
+    const now = performance.now();
+    if (now - this.lastMoveSent >= this.moveSendIntervalMs && !this.mpFrozen) {
+      this.lastMoveSent = now;
+      const p = this.camera.position;
+      const moving = this.inputService.moveForward || this.inputService.moveBackward ||
+                     this.inputService.moveLeft || this.inputService.moveRight;
+      this.networkService.sendMove(p.x, p.y, p.z, this.camera.rotation.y, moving);
+    }
+
+    // Mitspieler-Avatare an den Netzwerk-State angleichen und animieren.
+    this.remotePlayers.sync(this.networkService.players, this.networkService.sessionId);
+    this.remotePlayers.update();
+
+    // Eigenes Leben/Kills/Respawn vom Server uebernehmen.
+    this.syncMyHealth();
+  }
+
+  /** Uebernimmt eigenes Leben/Kills/Respawn aus dem Server-State (HUD + Feedback). */
+  private syncMyHealth(): void {
+    const me = this.networkService.getPlayer(this.networkService.sessionId);
+    if (!me) return;
+
+    if (me.hp < this.lastMyHp) this.playDamageFeedback();
+    if (me.hp !== this.lastMyHp) {
+      this.ngZone.run(() => this.playerService.setHealth(me.hp));
+      this.lastMyHp = me.hp;
+    }
+    if (me.kills !== this.frags) this.ngZone.run(() => this.frags = me.kills);
+
+    // Respawn: war eingefroren und der Server hat neu gesetzt -> hin teleportieren.
+    if (this.mpFrozen && !me.dead) {
+      this.camera.position.set(me.x, me.y, me.z);
+      this.mpFrozen = false;
+      this.lastMyHp = me.hp;
+    }
   }
 
   /** Besen-Bild nur im Flug-Modus einblenden, direkt am DOM. */
@@ -713,6 +940,8 @@ export class GameComponent implements AfterViewInit, OnDestroy {
   ngOnDestroy() {
     if (this.animationId) cancelAnimationFrame(this.animationId);
     this.subs.forEach(s => s.unsubscribe());
+    this.networkService.disconnect();
+    this.remotePlayers.clear();
     this.composer.dispose();
     this.renderer.dispose();
   }

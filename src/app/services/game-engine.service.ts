@@ -32,6 +32,9 @@ export class GameEngineService {
   public broom: Broom;
   public fps: number = 0;
 
+  /** Geladenes Soldaten-Modell (fuer Mitspieler-Avatare im Multiplayer wiederverwendet). */
+  public soldierModel?: { scene: THREE.Object3D; clips: THREE.AnimationClip[] };
+
   /** Aktueller Fortbewegungsmodus. Nur EINE Physik ist pro Frame aktiv. */
   public mode: PlayerMode = 'ON_FOOT';
 
@@ -195,7 +198,11 @@ export class GameEngineService {
 
     // Nur menschliche Gegner: der Soldat. (Roboter/Neon-Formen sind raus.)
     const soldier = await load('assets/models/soldier/Soldier.glb');
-    if (soldier) this.enemyService.registerModel('jaeger', soldier.scene, soldier.animations);
+    if (soldier) {
+      this.enemyService.registerModel('jaeger', soldier.scene, soldier.animations);
+      // Fuer Mitspieler-Avatare im Multiplayer aufheben (wird pro Spieler geklont).
+      this.soldierModel = { scene: soldier.scene, clips: soldier.animations };
+    }
   }
 
   /**

@@ -1,0 +1,19 @@
+{
+  "name": "3d-shooter-server",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Colyseus-Server fuer den Deathmatch-Modus des 3d-shooter.",
+  "type": "commonjs",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@colyseus/schema": "^2.0.35",
+    "colyseus": "^0.15.17"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsx": "^4.7.0"
+  }
+}

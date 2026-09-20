@@ -48,4 +48,12 @@ export class PlayerService {
   public reset(): void {
     this.healthSubject.next(this.maxHealth);
   }
+
+  /**
+   * Setzt das Leben direkt (Multiplayer: der Server ist die Wahrheit).
+   * Loest bewusst KEIN dead$ aus — Tod/Respawn steuert dort der Server.
+   */
+  public setHealth(value: number): void {
+    this.healthSubject.next(Math.max(0, Math.min(this.maxHealth, value)));
+  }
 }
