@@ -22,6 +22,11 @@ export class Car {
   private steer = 0;
   private readonly maxWheelSteer = 0.5; // Rad-Einschlag in Rad (~28°)
 
+  /** Rücklicht-Material (rot; leuchtet beim Bremsen heller). */
+  private taillightMats: THREE.MeshStandardMaterial[] = [];
+  /** Auspuffflammen (nur beim Gasgeben sichtbar). */
+  private flames: THREE.Mesh[] = [];
+
   constructor(model: THREE.Group) {
     // ferrari.glb ist bereits in Metern (~4.5m lang). Die FRONT zeigt nach -Z
     // (Vorderräder bei z<0), das Heck nach +Z. "vorwärts" = -Z, Kamera am Heck (+Z).
@@ -44,7 +49,57 @@ export class Car {
     }
     this.steeringWheel = model.getObjectByName('steering_wheel');
 
+    this.setupLights(model);
+    this.setupFlames(model);
+
     this.mesh = model;
+  }
+
+  /** Scheinwerfer (weiß, an) + Rücklicht (rot) aus den Modell-Meshes, plus ein Lichtkegel. */
+  private setupLights(model: THREE.Group): void {
+    // Scheinwerfer-Glas leuchtet (Bloom macht daraus echtes Licht).
+    this.setEmissive(model.getObjectByName('lights'), 0xfff4e0, 2.2);
+    // Rücklicht-Glas: rote Grundhelligkeit, Referenzen fürs Bremslicht merken.
+    this.taillightMats = this.setEmissive(model.getObjectByName('lights_red'), 0xff1100, 0.8);
+
+    // Echter Scheinwerferkegel, der die Straße/das Terrain vorne ausleuchtet (-Z).
+    const beam = new THREE.SpotLight(0xfff2d0, 120, 60, Math.PI / 5, 0.4, 1.5);
+    beam.position.set(0, 0.6, -1.9);
+    beam.target.position.set(0, -0.2, -14);
+    model.add(beam, beam.target);
+  }
+
+  /** Setzt Emissiv-Farbe/Stärke auf allen Materialien eines Mesh; gibt sie zurück. */
+  private setEmissive(obj: THREE.Object3D | undefined, color: number, intensity: number): THREE.MeshStandardMaterial[] {
+    const out: THREE.MeshStandardMaterial[] = [];
+    if (!obj) return out;
+    const mesh = obj as THREE.Mesh;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const m of mats) {
+      const std = m as THREE.MeshStandardMaterial;
+      if (std && std.emissive) {
+        std.emissive.setHex(color);
+        std.emissiveIntensity = intensity;
+        out.push(std);
+      }
+    }
+    return out;
+  }
+
+  /** Zwei additive Flammen-Kegel am Heck-Auspuff (+Z), anfangs versteckt. */
+  private setupFlames(model: THREE.Group): void {
+    for (const fx of [-0.16, 0.16]) {
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0xff7722, transparent: true, opacity: 0.9,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      });
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.6, 12), mat);
+      cone.rotation.x = Math.PI / 2;         // Spitze zeigt nach hinten (+Z)
+      cone.position.set(fx, 0.33, 2.35);     // an den Auspuffenden
+      cone.visible = false;
+      model.add(cone);
+      this.flames.push(cone);
+    }
   }
 
   public update(input: { delta: number, forward: boolean, backward: boolean, left: boolean, right: boolean }) {
@@ -84,6 +139,21 @@ export class Car {
 
     // Lenkrad dreht mit (lokale Z-Achse, stärker als die Räder).
     if (this.steeringWheel) this.steeringWheel.rotation.z = this.steer * 2.2;
+
+    // Bremslicht: beim Bremsen (Rückwärtstaste) heller rot.
+    const braking = input.backward;
+    for (const m of this.taillightMats) m.emissiveIntensity = braking ? 4.5 : 0.8;
+
+    // Auspuffflammen nur beim Gasgeben (Vorwärts) — flackern in Größe/Deckkraft.
+    const firing = input.forward;
+    for (const f of this.flames) {
+      f.visible = firing;
+      if (firing) {
+        const s = 0.7 + Math.random() * 0.6;
+        f.scale.set(s, s, 0.8 + Math.random() * 1.3);
+        (f.material as THREE.MeshBasicMaterial).opacity = 0.55 + Math.random() * 0.4;
+      }
+    }
   }
 
   public setPosition(x: number, y: number, z: number) {

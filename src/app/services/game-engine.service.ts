@@ -63,8 +63,21 @@ export class GameEngineService {
 
   /** Abstand, ab dem man in Reichweite des Autos ist (Ein-/Ausstieg). */
   private readonly carEnterDistance = 6;
-  /** Fester Kamera-Offset hinter/über dem Auto (Verfolgerkamera). */
-  private readonly carCamOffset = new THREE.Vector3(0, 2.7, 6.2);
+  /** Auto-Kameraansichten (per Taste V umschaltbar). off = Position relativ zum Auto,
+   *  ahead/lookH = Blickpunkt vor dem Auto. */
+  private readonly carCamModes: { off: THREE.Vector3; ahead: number; lookH: number; name: string }[] = [
+    { off: new THREE.Vector3(0, 2.7, 6.2),  ahead: 2.5, lookH: 0.1, name: 'VERFOLGER' },
+    { off: new THREE.Vector3(0, 4.6, 11),   ahead: 3.0, lookH: 0.6, name: 'WEIT' },
+    { off: new THREE.Vector3(0, 1.35, -1.1), ahead: 10, lookH: 0.6, name: 'MOTORHAUBE' },
+    { off: new THREE.Vector3(0.32, 1.2, 0.15), ahead: 10, lookH: 1.1, name: 'COCKPIT' },
+    { off: new THREE.Vector3(0, 13, 7),     ahead: 0,   lookH: 0,   name: 'VOGEL' },
+  ];
+  private carCamMode = 0;
+  private vKeyWasDown = false;
+
+  private carCamSubject = new Subject<string>();
+  /** Feuert beim Umschalten der Auto-Kamera (für HUD-Hinweis). */
+  public carCam$: Observable<string> = this.carCamSubject.asObservable();
 
   constructor(
     private inputService: InputService,
@@ -403,6 +416,14 @@ export class GameEngineService {
       }
     }
     this.fKeyWasDown = fDown;
+
+    // --- Auto-Kamera umschalten (Taste V, nur im Auto) ---
+    const vDown = this.inputService.changeCamera;
+    if (vDown && !this.vKeyWasDown && this.mode === 'IN_CAR') {
+      this.carCamMode = (this.carCamMode + 1) % this.carCamModes.length;
+      this.carCamSubject.next(this.carCamModes[this.carCamMode].name);
+    }
+    this.vKeyWasDown = vDown;
   }
 
   /** Auto fahren + Verfolgerkamera. */
@@ -427,14 +448,16 @@ export class GameEngineService {
       this.car.stop();
     }
 
-    // Verfolgerkamera: aufrecht (nur Fahrtrichtung), damit Hangneigung nicht die Sicht kippt.
+    // Kamera nach gewähltem Modus (Taste V), aufrecht (nur Fahrtrichtung),
+    // damit die Hangneigung im Offroad die Sicht nicht kippt.
+    const cam = this.carCamModes[this.carCamMode];
     const yawQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.car.getHeading());
-    const offset = this.carCamOffset.clone().applyQuaternion(yawQuat);
+    const offset = cam.off.clone().applyQuaternion(yawQuat);
     this.camera.position.copy(this.car.mesh.position).add(offset);
-    // Blick über das Auto nach vorne (Fahrtrichtung = -Z, mit Heading gedreht).
+    // Blickpunkt vor dem Auto (Fahrtrichtung = -Z, mit Heading gedreht).
     const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(yawQuat);
-    const look = this.car.mesh.position.clone().addScaledVector(forward, 2.5);
-    look.y += 0.1; // etwas nach unten schauen -> Auto + Räder besser im Bild
+    const look = this.car.mesh.position.clone().addScaledVector(forward, cam.ahead);
+    look.y += cam.lookH;
     this.camera.lookAt(look);
   }
 
