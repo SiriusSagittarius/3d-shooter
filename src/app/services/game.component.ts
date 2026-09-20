@@ -327,6 +327,8 @@ export class GameComponent implements AfterViewInit, OnDestroy {
   public frags = 0;
   /** true zwischen eigenem Tod und Respawn — blockt das Schiessen. */
   private mpFrozen = false;
+  /** false, bis die Kamera einmalig auf den Server-Spawn teleportiert wurde. */
+  private mpSpawned = false;
   /** Drosselung fuers Positions-Senden (~20x/Sek). */
   private lastMoveSent = 0;
   /** Letztes bekanntes eigenes Leben (fuer Schadens-Flash-Erkennung). */
@@ -608,6 +610,7 @@ export class GameComponent implements AfterViewInit, OnDestroy {
     this.mpStatus = '';
     this.lastMyHp = 100;
     this.mpFrozen = false;
+    this.mpSpawned = false; // Kamera wird beim ersten State auf den Spawn teleportiert
     this.playerService.reset();
     this.started = true;
     this.gameEngine.lockControls();
@@ -789,9 +792,13 @@ export class GameComponent implements AfterViewInit, OnDestroy {
 
   /** Pro Frame im Multiplayer: eigene Position senden, Avatare + eigenes Leben abgleichen. */
   private updateMultiplayer(): void {
-    // Eigene Position/Blickrichtung gedrosselt senden (~20x/Sek), solange lebendig.
+    // Zuerst eigenen Server-Zustand uebernehmen (Spawn-Teleport, HP, Kills).
+    this.syncMyHealth();
+
+    // Eigene Position senden — erst NACH dem initialen Spawn-Teleport, sonst
+    // wuerde der Standard-Startpunkt (0,1.6,20) den Server-Spawn ueberschreiben.
     const now = performance.now();
-    if (now - this.lastMoveSent >= this.moveSendIntervalMs && !this.mpFrozen) {
+    if (this.mpSpawned && !this.mpFrozen && now - this.lastMoveSent >= this.moveSendIntervalMs) {
       this.lastMoveSent = now;
       const p = this.camera.position;
       const moving = this.inputService.moveForward || this.inputService.moveBackward ||
@@ -802,15 +809,21 @@ export class GameComponent implements AfterViewInit, OnDestroy {
     // Mitspieler-Avatare an den Netzwerk-State angleichen und animieren.
     this.remotePlayers.sync(this.networkService.players, this.networkService.sessionId);
     this.remotePlayers.update();
-
-    // Eigenes Leben/Kills/Respawn vom Server uebernehmen.
-    this.syncMyHealth();
   }
 
   /** Uebernimmt eigenes Leben/Kills/Respawn aus dem Server-State (HUD + Feedback). */
   private syncMyHealth(): void {
     const me = this.networkService.getPlayer(this.networkService.sessionId);
     if (!me) return;
+
+    // Einmaliger Spawn-Teleport: Kamera auf den vom Server zugewiesenen Startpunkt
+    // (einander zugewandt) setzen, damit die Spieler nicht aufeinander stehen.
+    if (!this.mpSpawned) {
+      this.camera.position.set(me.x, me.y, me.z);
+      this.camera.rotation.y = me.ry;
+      this.mpSpawned = true;
+      this.lastMyHp = me.hp;
+    }
 
     if (me.hp < this.lastMyHp) this.playDamageFeedback();
     if (me.hp !== this.lastMyHp) {
@@ -884,6 +897,14 @@ export class GameComponent implements AfterViewInit, OnDestroy {
     ctx.fillStyle = '#ff3344';
     for (const enemy of this.enemyService.getEnemies()) {
       ctx.fillRect(enemy.position.x - 2, enemy.position.z - 2, 4, 4);
+    }
+
+    // Mitspieler im Deathmatch (gelbe Punkte) — hilft, den Gegner zu finden.
+    if (this.mpActive) {
+      ctx.fillStyle = '#ffcc00';
+      for (const rp of this.remotePlayers.getPositions()) {
+        ctx.fillRect(rp.x - 3, rp.z - 3, 6, 6);
+      }
     }
     ctx.restore();
 

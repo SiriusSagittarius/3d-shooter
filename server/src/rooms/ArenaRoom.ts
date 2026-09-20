@@ -18,6 +18,8 @@ export class Player extends Schema {
   @type('number') hp = 100;
   @type('number') kills = 0;
   @type('boolean') dead = false;
+  /** Feste Spawn-Seite (nicht synchronisiert) — Spieler starten einander zugewandt. */
+  spawnIndex = 0;
 }
 
 export class ArenaState extends Schema {
@@ -48,6 +50,16 @@ export class ArenaRoom extends Room<ArenaState> {
 
   private readonly respawnDelayMs = 3000;
   private readonly defaultDamage = 50; // Sniper: 2 Treffer = Kill
+
+  /**
+   * Feste Spawn-Punkte, einander zugewandt (Blick zur Mitte). So sehen sich
+   * beide Spieler sofort und stehen nicht aufeinander. ry entspricht
+   * camera.rotation.y im Client (0 = Blick Richtung -z, PI = Richtung +z).
+   */
+  private readonly spawns = [
+    { x: 0, z: 26, ry: 0 },        // Spieler 1: Blick Richtung -z (zur Mitte)
+    { x: 0, z: -26, ry: Math.PI }, // Spieler 2: Blick Richtung +z (zur Mitte)
+  ];
 
   onCreate(): void {
     this.setState(new ArenaState());
@@ -88,6 +100,8 @@ export class ArenaRoom extends Room<ArenaState> {
   onJoin(client: Client, options?: { name?: string }): void {
     const p = new Player();
     p.name = options?.name?.slice(0, 16) || `Spieler-${this.clients.length}`;
+    // Freie Spawn-Seite waehlen: erster Spieler Seite 0, zweiter Seite 1.
+    p.spawnIndex = this.state.players.size % this.spawns.length;
     this.placeAtSpawn(p);
     this.state.players.set(client.sessionId, p);
     console.log(`[+] ${p.name} (${client.sessionId}) beigetreten. Spieler: ${this.state.players.size}`);
@@ -107,13 +121,12 @@ export class ArenaRoom extends Room<ArenaState> {
     this.placeAtSpawn(p);
   }
 
-  /** Zufaelliger Spawn auf einem Ring um das Zentrum, innerhalb der Arena-Waende. */
+  /** Setzt den Spieler an seinen festen, der Mitte zugewandten Spawn-Punkt. */
   private placeAtSpawn(p: Player): void {
-    const angle = Math.random() * Math.PI * 2;
-    const radius = 22 + Math.random() * 26;
-    p.x = Math.max(-90, Math.min(90, Math.cos(angle) * radius));
-    p.z = Math.max(-90, Math.min(90, Math.sin(angle) * radius));
+    const s = this.spawns[p.spawnIndex] ?? this.spawns[0];
+    p.x = s.x;
+    p.z = s.z;
     p.y = 1.6;
-    p.ry = 0;
+    p.ry = s.ry;
   }
 }

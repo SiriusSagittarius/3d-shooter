@@ -97,6 +97,13 @@ export class RemotePlayerService {
     return [...this.avatars.values()].map(a => a.hitbox);
   }
 
+  /** Weltpositionen aller Avatare (fuer die Minimap — Mitspieler finden). */
+  public getPositions(): { x: number; z: number }[] {
+    return [...this.avatars.values()]
+      .filter(a => !a.dead)
+      .map(a => ({ x: a.root.position.x, z: a.root.position.z }));
+  }
+
   /**
    * Ermittelt, welchem Spieler ein getroffenes Objekt gehoert (Parent-Kette hoch).
    * Liefert die Session-ID oder null, wenn kein Avatar getroffen wurde.
