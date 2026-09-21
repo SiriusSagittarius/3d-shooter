@@ -54,6 +54,14 @@ export class NetworkService {
   /** Verbindung wurde getrennt (Server weg / Raum verlassen). */
   public left$: Observable<void> = this.leftSubject.asObservable();
 
+  private playerJoinedSubject = new Subject<{ id: string; name: string }>();
+  /** Ein ANDERER Spieler ist dem Raum beigetreten (oder war schon da). */
+  public playerJoined$: Observable<{ id: string; name: string }> = this.playerJoinedSubject.asObservable();
+
+  private playerLeftSubject = new Subject<{ id: string }>();
+  /** Ein ANDERER Spieler hat den Raum verlassen. */
+  public playerLeft$: Observable<{ id: string }> = this.playerLeftSubject.asObservable();
+
   /**
    * Server-URL: optional per ?server=... in der Adresszeile ueberschreibbar,
    * sonst automatisch gleicher Host wie die Seite auf Port 2567. So funktioniert
@@ -76,6 +84,15 @@ export class NetworkService {
 
     this.room.onMessage('shot', (data: ShotEvent) => this.shotSubject.next(data));
     this.room.onMessage('killed', (data: KilledEvent) => this.killedSubject.next(data));
+
+    // Andere Spieler beobachten (feuert auch fuer bereits Anwesende beim Beitritt).
+    const players = (this.room.state as { players?: any })?.players;
+    players?.onAdd?.((p: NetPlayer, id: string) => {
+      if (id !== this.sessionId) this.playerJoinedSubject.next({ id, name: p?.name ?? 'Spieler' });
+    });
+    players?.onRemove?.((_p: NetPlayer, id: string) => {
+      if (id !== this.sessionId) this.playerLeftSubject.next({ id });
+    });
 
     this.room.onLeave(() => {
       this.connected = false;
