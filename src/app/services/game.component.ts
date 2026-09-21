@@ -520,9 +520,16 @@ export class GameComponent implements AfterViewInit, OnDestroy {
     // Erlittener Schaden -> roter Rand-Flash + Screenshake.
     this.subs.push(this.playerService.damaged$.subscribe(() => this.playDamageFeedback()));
 
-    // Schuss -> Sprite-Animation (s3-s5) + Rückstoß an der Waffe.
+    // Schuss -> Sprite-Animation (s3-s5) + Rückstoß + Mündungsblitz vor der Kamera.
     this.subs.push(this.weaponService.fired$.subscribe(() => {
       this.weaponView.triggerShot();
+      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
+      const muzzle = this.camera.position.clone()
+        .addScaledVector(fwd, 2.0)
+        .addScaledVector(right, 0.22)
+        .add(new THREE.Vector3(0, -0.2, 0));
+      this.particleService.muzzleFlash(muzzle);
     }));
 
     // Ring durchflogen -> Bonus-Punkte.
@@ -568,7 +575,9 @@ export class GameComponent implements AfterViewInit, OnDestroy {
     // Anderer Spieler hat geschossen -> leiser Schuss-Sound + kurzes Muendungsfeuer.
     this.subs.push(this.networkService.shot$.subscribe(s => {
       this.gameEngine.playSound('shoot', 0.25);
-      this.particleService.createExplosion(new THREE.Vector3(s.x, s.y, s.z), new THREE.Color(0xffdd66));
+      // Mündungsblitz an der Waffe des Schützen (Startpunkt + Blickrichtung).
+      const muzzle = new THREE.Vector3(s.x, s.y, s.z).addScaledVector(new THREE.Vector3(s.dx, s.dy, s.dz), 1.0);
+      this.particleService.muzzleFlash(muzzle);
     }));
 
     // Eliminierung: eigene -> einfrieren bis Respawn; gegnerische -> Kill-Banner.
@@ -588,6 +597,17 @@ export class GameComponent implements AfterViewInit, OnDestroy {
         this.mpStatus = 'Verbindung getrennt.';
       });
       this.remotePlayers.clear();
+    }));
+
+    // Mitspieler betritt den Raum (oder war schon da) -> Banner + Signal-Sound.
+    this.subs.push(this.networkService.playerJoined$.subscribe(({ name }) => {
+      this.showBanner(`${name || 'GEGNER'} IST DA`);
+      this.gameEngine.playSound('kill', 0.5);
+    }));
+
+    // Mitspieler hat den Raum verlassen -> Hinweis.
+    this.subs.push(this.networkService.playerLeft$.subscribe(() => {
+      this.showBanner('GEGNER HAT VERLASSEN');
     }));
   }
 
@@ -899,11 +919,16 @@ export class GameComponent implements AfterViewInit, OnDestroy {
       ctx.fillRect(enemy.position.x - 2, enemy.position.z - 2, 4, 4);
     }
 
-    // Mitspieler im Deathmatch (gelbe Punkte) — hilft, den Gegner zu finden.
+    // Mitspieler im Deathmatch (große gelbe Punkte mit Rand) — Gegner leicht finden.
     if (this.mpActive) {
-      ctx.fillStyle = '#ffcc00';
       for (const rp of this.remotePlayers.getPositions()) {
-        ctx.fillRect(rp.x - 3, rp.z - 3, 6, 6);
+        ctx.beginPath();
+        ctx.arc(rp.x, rp.z, 8, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffdd00';
+        ctx.fill();
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = '#000';
+        ctx.stroke();
       }
     }
     ctx.restore();

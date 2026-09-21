@@ -1,6 +1,5 @@
 import { Injectable } from '@angular/core';
 import * as THREE from 'three';
-import { Reflector } from 'three/addons/objects/Reflector.js';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { ImprovedNoise } from 'three/addons/math/ImprovedNoise.js';
 
@@ -514,18 +513,9 @@ export class LevelService {
     floor.receiveShadow = true;
     this.environmentGroup.add(floor);
 
-    // NASSER ASPHALT: echter Spiegel (Reflector) für Neon-Reflexionen der Stadt.
-    // Dunkel getönt -> wirkt wie eine regennasse Straße, kein perfekter Spiegel.
-    const mirror = new Reflector(new THREE.PlaneGeometry(roomSize * 2, roomSize * 2), {
-      textureWidth: 1024,
-      textureHeight: 1024,
-      color: 0x2a3340, // dunkle Tönung = gedämpfte, realistisch nasse Reflexion
-    });
-    mirror.rotation.x = -Math.PI / 2;
-    mirror.position.y = 0.02;
-    this.environmentGroup.add(mirror);
+    // (Boden-Spiegelung entfernt — der Reflector sah nicht gut aus.)
 
-    // Raster (Tron-Style) — Cyan glüht dank Bloom leicht, schwebt knapp über dem Spiegel.
+    // Raster (Tron-Style) — Cyan glüht dank Bloom leicht über dem dunklen Boden.
     const grid = new THREE.GridHelper(roomSize * 2, 50, 0x00ffcc, 0x0c2a22);
     grid.position.y = 0.04;
     (grid.material as THREE.Material).transparent = true;
